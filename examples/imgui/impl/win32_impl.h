@@ -2,12 +2,13 @@
 #define __WIN32_IMPL_H__
 
 #include "shared.h"
+#include "windows.h"
 
 namespace impl
 {
 	namespace win32
 	{
-		void init(void* hwnd);
+		void init(HWND hwnd);
 	}
 }
 

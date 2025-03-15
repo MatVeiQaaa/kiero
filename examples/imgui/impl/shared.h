@@ -2,5 +2,5 @@
 
 namespace impl
 {
-	void showExampleWindow(const char* comment);
+	void MenuLoop();
 }

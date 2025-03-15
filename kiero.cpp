@@ -1,6 +1,9 @@
 #include "kiero.h"
 #include <Windows.h>
 #include <assert.h>
+#include <string>
+
+#include "Helpers/Helpers.hpp"
 
 #if KIERO_INCLUDE_D3D9
 # include <d3d9.h>
@@ -679,19 +682,18 @@ void kiero::shutdown()
 kiero::Status::Enum kiero::bind(uint16_t _index, void** _original, void* _function)
 {
 	// TODO: Need own detour function
-
-	assert(_original != NULL && _function != NULL);
-
+	assert(_original != NULL && _function != NULL && "kiero::bind received nullptr as arg");
 	if (g_renderType != RenderType::None)
 	{
+
 #if KIERO_USE_MINHOOK
 		void* target = (void*)g_methodsTable[_index];
 		if (MH_CreateHook(target, _function, _original) != MH_OK || MH_EnableHook(target) != MH_OK)
 		{
+			mLogger.LogOut("MinHook failed to set hook on fn[" + std::to_string(_index) + "]");
 			return Status::UnknownError;
 		}
 #endif
-
 		return Status::Success;
 	}
 

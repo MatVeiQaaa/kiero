@@ -2,18 +2,11 @@
 
 #include "shared.h"
 #include <stdio.h>
-#include "../imgui/imgui.h"
+#include "imgui/imgui.h"
 
-void impl::showExampleWindow(const char* comment)
+#include "ImGuiInjector/ImGuiInjector.hpp"
+
+void impl::MenuLoop()
 {
-	char buffer[128];
-	::memset(buffer, 0, 128);
-	::sprintf(buffer, "Kiero Dear ImGui Example (%s)", comment);
-
-	ImGui::Begin(buffer);
-
-	ImGui::Text("Hello");
-	ImGui::Button("World!");
-
-	ImGui::End();
+	ImGuiInjector::Get().RunMenus();
 }
