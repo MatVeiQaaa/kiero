@@ -14,6 +14,7 @@
 #include "imgui/backends/imgui_impl_dx9.h"
 
 #include "Helpers/Helpers.hpp"
+#include "ImGuiInjector/ImGuiInjector.hpp"
 
 typedef long(__stdcall* Reset)(LPDIRECT3DDEVICE9, D3DPRESENT_PARAMETERS*);
 static Reset oReset = NULL;
@@ -38,6 +39,8 @@ long __stdcall hkReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresen
 long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 {
 	static bool init = false;
+	static HWND TargetHwnd = 0;
+	static LPDIRECT3DDEVICE9 device = 0;
 
 	if (!init)
 	{
@@ -47,7 +50,8 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 		D3DDEVICE_CREATION_PARAMETERS params;
 		pDevice->GetCreationParameters(&params);
 
-		HWND TargetHwnd = params.hFocusWindow;
+		TargetHwnd = params.hFocusWindow;
+		device = pDevice;
 		assert(TargetHwnd != NULL && "No window handle in hkEndScene()");
 		impl::win32::init(TargetHwnd);
 
@@ -58,10 +62,31 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 		assert(vp != NULL && "ImGuiViewport was nullptr in khEndScene()");
 		vp->PlatformHandleRaw = reinterpret_cast<void*>(TargetHwnd);
 
+		ImGuiInjector::Get().LoadJapaneseFont();
+
 		init = true;
 	}
 
+	{
+		D3DDEVICE_CREATION_PARAMETERS params;
+		pDevice->GetCreationParameters(&params);
+
+		if (TargetHwnd != params.hFocusWindow) {
+			TargetHwnd = params.hFocusWindow;
+			ImGui_ImplWin32_Shutdown();
+			ImGui_ImplWin32_Init(TargetHwnd);
+		}
+		if (device != pDevice) {
+			device = pDevice;
+			ImGui_ImplDX9_Shutdown();
+			ImGui_ImplDX9_Init(pDevice);
+		}
+	}
+
 	IDirect3DSurface9* backbuffer;
+
+	ImGuiInjector::Get().ResetInput();
+	if (!ImGuiInjector::Get().IsMenuRunning()) return oEndScene(pDevice);
 
 	if (SUCCEEDED(pDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
 	{
@@ -78,6 +103,7 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 
 		backbuffer->Release();
 	}
+	ImGuiInjector::Get().UpdateInput();
 
 	return oEndScene(pDevice);
 }
