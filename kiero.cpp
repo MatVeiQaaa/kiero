@@ -132,10 +132,6 @@ kiero::Status::Enum kiero::init(RenderType::Enum _renderType)
 				g_methodsTable = (uint150_t*)::calloc(119, sizeof(uint150_t));
 				::memcpy(g_methodsTable, *(uint150_t**)device, 119 * sizeof(uint150_t));
 
-#if KIERO_USE_MINHOOK
-				MH_Initialize();
-#endif
-
 				device->Release();
 				device = NULL;
 
