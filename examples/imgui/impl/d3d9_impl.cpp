@@ -63,6 +63,7 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 		vp->PlatformHandleRaw = reinterpret_cast<void*>(TargetHwnd);
 
 		ImGuiInjector::Get().LoadJapaneseFont();
+		ImGuiInjector::Get().SetStartingStyle(ImGui::GetStyle());
 
 		init = true;
 	}
@@ -85,6 +86,7 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 
 	IDirect3DSurface9* backbuffer;
 
+	ImGuiInjector::Get().UpdateGlobalScale();
 	ImGuiInjector::Get().ResetInput();
 	if (!ImGuiInjector::Get().IsMenuRunning()) return oEndScene(pDevice);
 
