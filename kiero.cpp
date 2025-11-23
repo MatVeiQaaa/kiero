@@ -1,3 +1,4 @@
+#define WIN32_LEAN_AND_MEAN
 #include "kiero.h"
 #include <Windows.h>
 #include <assert.h>

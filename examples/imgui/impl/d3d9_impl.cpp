@@ -41,11 +41,12 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 	static bool init = false;
 	static HWND TargetHwnd = 0;
 	static LPDIRECT3DDEVICE9 device = 0;
+	static ImGuiContext* ctx = ImGui::CreateContext();
+	ImGui::SetCurrentContext(ctx);
 
 	if (!init)
 	{
 		IMGUI_CHECKVERSION();
-		ImGui::CreateContext();
 
 		D3DDEVICE_CREATION_PARAMETERS params;
 		pDevice->GetCreationParameters(&params);
@@ -90,8 +91,15 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 	ImGuiInjector::Get().ResetInput();
 	if (!ImGuiInjector::Get().IsMenuRunning()) return oEndScene(pDevice);
 
+	IDirect3DSurface9* oldTarget;
+	pDevice->GetRenderTarget(0, &oldTarget);
 	if (SUCCEEDED(pDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
 	{
+		pDevice->SetRenderTarget(0, backbuffer);
+		D3DSURFACE_DESC desc;
+		backbuffer->GetDesc(&desc);
+		ImVec2 canvasSize(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
+		ImGuiInjector::Get().SetCanvasSize(canvasSize);
 		pDevice->SetRenderTarget(0, backbuffer);
 		ImGui_ImplDX9_NewFrame();
 		ImGui_ImplWin32_NewFrame();
@@ -101,9 +109,28 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 
 		ImGui::EndFrame();
 		ImGui::Render();
-		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+		// ImGui doesn't behave correctly when window and canvas size differ. 
+		// https://github.com/ocornut/imgui/issues/6955
+		ImDrawData* draw_data = ImGui::GetDrawData();
+		ImVec2 scale;
+		scale.x = canvasSize.x / ImGui::GetMainViewport()->Size.x;
+		scale.y = canvasSize.y / ImGui::GetMainViewport()->Size.y;
+		if (draw_data) {
+			for (auto& list : draw_data->CmdLists) {
+				for (auto& vert : list->VtxBuffer) {
+					vert.pos.x *= scale.x;
+					vert.pos.y *= scale.y;
+				}
+			}
+			draw_data->DisplaySize.x = canvasSize.x;
+			draw_data->DisplaySize.y = canvasSize.y;
+			draw_data->ScaleClipRects(scale);
+		}
+		ImGui_ImplDX9_RenderDrawData(draw_data);
 
 		backbuffer->Release();
+
+		pDevice->SetRenderTarget(0, oldTarget);
 	}
 	ImGuiInjector::Get().UpdateInput();
 
