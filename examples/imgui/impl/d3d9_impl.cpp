@@ -1,4 +1,4 @@
-﻿#include "../../../kiero.h"
+#include "../../../kiero.h"
 
 #if KIERO_INCLUDE_D3D9
 
@@ -6,15 +6,17 @@
 #include <d3d9.h>
 #include <assert.h>
 #include <iostream>
+#include <array>
 
 #include "win32_impl.h"
 
-#include "imgui/imgui.h"
-#include "imgui/backends/imgui_impl_win32.h"
-#include "imgui/backends/imgui_impl_dx9.h"
+#include <imgui/imgui.h>
+#include <imgui/backends/imgui_impl_win32.h>
+#include <imgui/backends/imgui_impl_dx9.h>
+#include <safetyhook.hpp>
 
-#include "Helpers/Helpers.hpp"
-#include "ImGuiInjector/ImGuiInjector.hpp"
+#include <Helpers/Helpers.hpp>
+#include <ImGuiInjector/ImGuiInjector.hpp>
 
 typedef long(__stdcall* Reset)(LPDIRECT3DDEVICE9, D3DPRESENT_PARAMETERS*);
 static Reset oReset = NULL;
@@ -27,8 +29,6 @@ long __stdcall hkReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresen
 	if (pDevice == NULL) {
 		return oReset(pDevice, pPresentationParameters);
 	}
-
-	D3DDEVICE_CREATION_PARAMETERS pParameters{ 0 };
 	ImGui_ImplDX9_InvalidateDeviceObjects();
 	long result = oReset(pDevice, pPresentationParameters);
 	ImGui_ImplDX9_CreateDeviceObjects();
@@ -36,17 +36,37 @@ long __stdcall hkReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresen
 	return result;
 }
 
+static int sceneIdx = 0;
+static safetyhook::InlineHook oPresent;
+long __stdcall hkPresent(LPDIRECT3DSWAPCHAIN9 pSwapchain, const RECT* pSourceRect, const RECT* pDestRect, HWND hDestWindowOverride, const RGNDATA* pDirtyRegion, DWORD dwFlags) {
+	sceneIdx = 0;
+	return oPresent.stdcall<long>(pSwapchain, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion, dwFlags);
+}
+
 long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 {
+	int curSceneIdx = sceneIdx;
+	sceneIdx++;
+	if (curSceneIdx != 0) return oEndScene(pDevice);
+
 	static bool init = false;
 	static HWND TargetHwnd = 0;
 	static LPDIRECT3DDEVICE9 device = 0;
+	static int rtMax = 1;
 	static ImGuiContext* ctx = ImGui::CreateContext();
 	ImGui::SetCurrentContext(ctx);
 
 	if (!init)
 	{
 		IMGUI_CHECKVERSION();
+
+		IDirect3DSwapChain9* swapchain{};
+		pDevice->GetSwapChain(0, &swapchain);
+		oPresent = safetyhook::create_inline((*(uintptr_t**)swapchain)[3], hkPresent);
+
+		D3DCAPS9 caps{};
+		pDevice->GetDeviceCaps(&caps);
+		rtMax = caps.NumSimultaneousRTs;
 
 		D3DDEVICE_CREATION_PARAMETERS params;
 		pDevice->GetCreationParameters(&params);
@@ -72,7 +92,6 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 	{
 		D3DDEVICE_CREATION_PARAMETERS params;
 		pDevice->GetCreationParameters(&params);
-
 		if (TargetHwnd != params.hFocusWindow) {
 			TargetHwnd = params.hFocusWindow;
 			ImGui_ImplWin32_Shutdown();
@@ -81,56 +100,61 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 		if (device != pDevice) {
 			device = pDevice;
 			ImGui_ImplDX9_Shutdown();
-			ImGui_ImplDX9_Init(pDevice);
+			ImGui_ImplDX9_Init(device);
 		}
 	}
 
-	IDirect3DSurface9* backbuffer;
-
 	ImGuiInjector::Get().UpdateGlobalScale();
 	ImGuiInjector::Get().ResetInput();
-	if (!ImGuiInjector::Get().IsMenuRunning()) return oEndScene(pDevice);
-
-	IDirect3DSurface9* oldTarget;
-	pDevice->GetRenderTarget(0, &oldTarget);
-	if (SUCCEEDED(pDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)))
-	{
-		pDevice->SetRenderTarget(0, backbuffer);
-		D3DSURFACE_DESC desc;
-		backbuffer->GetDesc(&desc);
-		ImVec2 canvasSize(static_cast<float>(desc.Width), static_cast<float>(desc.Height));
-		ImGuiInjector::Get().SetCanvasSize(canvasSize);
-		pDevice->SetRenderTarget(0, backbuffer);
-		ImGui_ImplDX9_NewFrame();
-		ImGui_ImplWin32_NewFrame();
-		ImGui::NewFrame();
-
-		impl::MenuLoop();
-
-		ImGui::EndFrame();
-		ImGui::Render();
-		// ImGui doesn't behave correctly when window and canvas size differ. 
-		// https://github.com/ocornut/imgui/issues/6955
-		ImDrawData* draw_data = ImGui::GetDrawData();
-		ImVec2 scale;
-		scale.x = canvasSize.x / ImGui::GetMainViewport()->Size.x;
-		scale.y = canvasSize.y / ImGui::GetMainViewport()->Size.y;
-		if (draw_data) {
-			for (auto& list : draw_data->CmdLists) {
-				for (auto& vert : list->VtxBuffer) {
-					vert.pos.x *= scale.x;
-					vert.pos.y *= scale.y;
-				}
-			}
-			draw_data->DisplaySize.x = canvasSize.x;
-			draw_data->DisplaySize.y = canvasSize.y;
-			draw_data->ScaleClipRects(scale);
+	static bool wasReset = false;
+	if (!ImGuiInjector::Get().IsMenuRunning() || IsIconic(TargetHwnd)) {
+		if (!wasReset) {
+			wasReset = true;
+			ImGui::GetIO().ClearInputKeys();
+			ImGui::GetIO().ClearInputMouse();
 		}
-		ImGui_ImplDX9_RenderDrawData(draw_data);
+		return oEndScene(pDevice);
+	}
+	wasReset = false;
 
-		backbuffer->Release();
+	std::vector<IDirect3DSurface9*> rts{};
+	rts.reserve(rtMax);
+	for (int i = 0; i < rts.capacity(); i++) {
+		IDirect3DSurface9* rt{};
+		device->GetRenderTarget(i, &rt);
+		rts.push_back(rt);
+		if (i != 0) pDevice->SetRenderTarget(i, NULL);
+	}
+	D3DSURFACE_DESC canvas{};
+	rts[0]->GetDesc(&canvas);
 
-		pDevice->SetRenderTarget(0, oldTarget);
+	IDirect3DSurface9* backbuffer{};
+	D3DSURFACE_DESC output{};
+	device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+	backbuffer->GetDesc(&output);
+	backbuffer->Release();
+
+	ImVec2 canvasF({ static_cast<float>(canvas.Width), static_cast<float>(canvas.Height) });
+
+	ImGuiInjector::Get().SetCanvasSize(canvasF);
+	ImGuiInjector::Get().SetOutputSize({ static_cast<float>(output.Width), static_cast<float>(output.Height) });
+
+	ImGui_ImplDX9_NewFrame();
+	ImGui_ImplWin32_NewFrame();
+	ImGui::GetIO().DisplaySize = canvasF;
+
+	ImGui::NewFrame();
+
+	impl::MenuLoop();
+
+	ImGui::EndFrame();
+	ImGui::Render();
+	ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+
+	for (int i = 0; i < rts.size(); i++) {
+		auto& tar = rts[i];
+		pDevice->SetRenderTarget(i, tar);
+		if (tar) tar->Release();
 	}
 	ImGuiInjector::Get().UpdateInput();
 
