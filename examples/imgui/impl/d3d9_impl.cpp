@@ -21,8 +21,14 @@
 typedef long(__stdcall* Reset)(LPDIRECT3DDEVICE9, D3DPRESENT_PARAMETERS*);
 static Reset oReset = NULL;
 
+typedef long(__stdcall* ResetEx)(LPDIRECT3DDEVICE9EX, D3DPRESENT_PARAMETERS*, D3DDISPLAYMODEEX*);
+static ResetEx oResetEx = NULL;
+
 typedef long(__stdcall* EndScene)(LPDIRECT3DDEVICE9);
 static EndScene oEndScene = NULL;
+
+typedef long(__stdcall* Present)(LPDIRECT3DSWAPCHAIN9, const RECT*, const RECT*, HWND, const RGNDATA*, DWORD);
+static Present oPresent = NULL;
 
 long __stdcall hkReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresentationParameters)
 {
@@ -36,19 +42,50 @@ long __stdcall hkReset(LPDIRECT3DDEVICE9 pDevice, D3DPRESENT_PARAMETERS* pPresen
 	return result;
 }
 
-static int sceneIdx = 0;
-static safetyhook::InlineHook oPresent;
+long __stdcall hkResetEx(LPDIRECT3DDEVICE9EX pDevice, D3DPRESENT_PARAMETERS* pPresentationParameters, D3DDISPLAYMODEEX* pFullscreenDisplayMode)
+{
+	if (pDevice == NULL) {
+		return oResetEx(pDevice, pPresentationParameters, pFullscreenDisplayMode);
+	}
+	ImGui_ImplDX9_InvalidateDeviceObjects();
+	long result = oResetEx(pDevice, pPresentationParameters, pFullscreenDisplayMode);
+	ImGui_ImplDX9_CreateDeviceObjects();
+
+	return result;
+}
+
+struct SceneDesc {
+	struct int2 {
+		int x = 0;
+		int y = 0;
+
+		auto operator<=>(const int2&) const = default;
+	};
+	int2 canvasSize;
+	int2 outputSize;
+	SceneDesc(int canvasX, int canvasY, int outputX, int outputY) :
+		canvasSize(canvasX, canvasY), outputSize(outputX, outputY) {
+	};
+};
+
+static int sceneIdx = -1;
+static int sceneTarget = -1;
+static std::vector<SceneDesc> scenes;
 long __stdcall hkPresent(LPDIRECT3DSWAPCHAIN9 pSwapchain, const RECT* pSourceRect, const RECT* pDestRect, HWND hDestWindowOverride, const RGNDATA* pDirtyRegion, DWORD dwFlags) {
-	sceneIdx = 0;
-	return oPresent.stdcall<long>(pSwapchain, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion, dwFlags);
+	if (!scenes.empty()) {
+		int target = scenes.size() - 1;
+		if (scenes.size() > 1) {
+			if (scenes[target].canvasSize != scenes[target - 1].canvasSize) target--;
+		}
+		sceneTarget = target;
+		scenes.clear();
+	}
+	sceneIdx = -1;
+	return oPresent(pSwapchain, pSourceRect, pDestRect, hDestWindowOverride, pDirtyRegion, dwFlags);
 }
 
 long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 {
-	int curSceneIdx = sceneIdx;
-	sceneIdx++;
-	if (curSceneIdx != 0) return oEndScene(pDevice);
-
 	static bool init = false;
 	static HWND TargetHwnd = 0;
 	static LPDIRECT3DDEVICE9 device = 0;
@@ -59,10 +96,6 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 	if (!init)
 	{
 		IMGUI_CHECKVERSION();
-
-		IDirect3DSwapChain9* swapchain{};
-		pDevice->GetSwapChain(0, &swapchain);
-		oPresent = safetyhook::create_inline((*(uintptr_t**)swapchain)[3], hkPresent);
 
 		D3DCAPS9 caps{};
 		pDevice->GetDeviceCaps(&caps);
@@ -104,6 +137,25 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 		}
 	}
 
+	D3DSURFACE_DESC canvas{};
+	{
+		IDirect3DSurface9* rt{};
+		pDevice->GetRenderTarget(0, &rt);
+		rt->GetDesc(&canvas);
+		rt->Release();
+	}
+	D3DSURFACE_DESC output{};
+	{
+		IDirect3DSurface9* backbuffer{};
+		pDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+		backbuffer->GetDesc(&output);
+		backbuffer->Release();
+	}
+	scenes.emplace_back(canvas.Width, canvas.Height, output.Width, output.Height);
+
+	sceneIdx++;
+	if (sceneIdx != sceneTarget) return oEndScene(pDevice);
+
 	ImGuiInjector::Get().UpdateGlobalScale();
 	ImGuiInjector::Get().ResetInput();
 	static bool wasReset = false;
@@ -116,23 +168,6 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 		return oEndScene(pDevice);
 	}
 	wasReset = false;
-
-	std::vector<IDirect3DSurface9*> rts{};
-	rts.reserve(rtMax);
-	for (int i = 0; i < rts.capacity(); i++) {
-		IDirect3DSurface9* rt{};
-		device->GetRenderTarget(i, &rt);
-		rts.push_back(rt);
-		if (i != 0) pDevice->SetRenderTarget(i, NULL);
-	}
-	D3DSURFACE_DESC canvas{};
-	rts[0]->GetDesc(&canvas);
-
-	IDirect3DSurface9* backbuffer{};
-	D3DSURFACE_DESC output{};
-	device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
-	backbuffer->GetDesc(&output);
-	backbuffer->Release();
 
 	ImVec2 canvasF({ static_cast<float>(canvas.Width), static_cast<float>(canvas.Height) });
 
@@ -151,11 +186,6 @@ long __stdcall hkEndScene(LPDIRECT3DDEVICE9 pDevice)
 	ImGui::Render();
 	ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
 
-	for (int i = 0; i < rts.size(); i++) {
-		auto& tar = rts[i];
-		pDevice->SetRenderTarget(i, tar);
-		if (tar) tar->Release();
-	}
 	ImGuiInjector::Get().UpdateInput();
 
 	return oEndScene(pDevice);
@@ -165,6 +195,8 @@ void impl::d3d9::init()
 {
 	kiero::bind(16, (void**)&oReset, hkReset);
 	kiero::bind(42, (void**)&oEndScene, hkEndScene);
+	kiero::bind(132, (void**)&oResetEx, hkResetEx);
+	kiero::bind(133 + 3, (void**)&oPresent, hkPresent);
 }
 
 #endif // KIERO_INCLUDE_D3D9

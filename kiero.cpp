@@ -81,63 +81,52 @@ kiero::Status::Enum kiero::init(RenderType::Enum _renderType)
 			if (_renderType == RenderType::D3D9)
 			{
 #if KIERO_INCLUDE_D3D9
+
+				auto exit_fail = [](HWND& window, WNDCLASSEX& windowClass) {
+					DestroyWindow(window);
+					UnregisterClass(windowClass.lpszClassName, windowClass.hInstance);
+					return Status::UnknownError;
+				};
+
 				HMODULE libD3D9;
 				if ((libD3D9 = ::GetModuleHandle(KIERO_TEXT("d3d9.dll"))) == NULL)
-				{
-					::DestroyWindow(window);
-					::UnregisterClass(windowClass.lpszClassName, windowClass.hInstance);
-					return Status::ModuleNotFoundError;
-				}
+					return exit_fail(window, windowClass);
+				decltype(Direct3DCreate9Ex)* create_ex;
+				D3DPRESENT_PARAMETERS pp;
+				HRESULT hr;
 
-				void* Direct3DCreate9;
-				if ((Direct3DCreate9 = ::GetProcAddress(libD3D9, "Direct3DCreate9")) == NULL)
-				{
-					::DestroyWindow(window);
-					::UnregisterClass(windowClass.lpszClassName, windowClass.hInstance);
-					return Status::UnknownError;
-				}
+				IDirect3DSwapChain9* swapchain;
+				IDirect3DDevice9Ex* device;
+				IDirect3D9Ex* d3d9ex;
 
-				LPDIRECT3D9 direct3D9;
-				if ((direct3D9 = ((LPDIRECT3D9(__stdcall*)(uint32_t))(Direct3DCreate9))(D3D_SDK_VERSION)) == NULL)
-				{
-					::DestroyWindow(window);
-					::UnregisterClass(windowClass.lpszClassName, windowClass.hInstance);
-					return Status::UnknownError;
-				}
+				create_ex = (decltype(Direct3DCreate9Ex)*)GetProcAddress(libD3D9, "Direct3DCreate9Ex");
+				if (!create_ex) return exit_fail(window, windowClass);
+				hr = create_ex(D3D_SDK_VERSION, &d3d9ex);
+				if (FAILED(hr)) return exit_fail(window, windowClass);
 
-				D3DPRESENT_PARAMETERS params;
-				params.BackBufferWidth = 0;
-				params.BackBufferHeight = 0;
-				params.BackBufferFormat = D3DFMT_UNKNOWN;
-				params.BackBufferCount = 0;
-				params.MultiSampleType = D3DMULTISAMPLE_NONE;
-				params.MultiSampleQuality = NULL;
-				params.SwapEffect = D3DSWAPEFFECT_DISCARD;
-				params.hDeviceWindow = window;
-				params.Windowed = 1;
-				params.EnableAutoDepthStencil = 0;
-				params.AutoDepthStencilFormat = D3DFMT_UNKNOWN;
-				params.Flags = NULL;
-				params.FullScreen_RefreshRateInHz = 0;
-				params.PresentationInterval = 0;
+				memset(&pp, 0, sizeof(pp));
+				pp.Windowed = 1;
+				pp.SwapEffect = D3DSWAPEFFECT_FLIP;
+				pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+				pp.BackBufferCount = 1;
+				pp.hDeviceWindow = window;
+				pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
 
-				LPDIRECT3DDEVICE9 device;
-				if (direct3D9->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_NULLREF, window, D3DCREATE_SOFTWARE_VERTEXPROCESSING | D3DCREATE_DISABLE_DRIVER_MANAGEMENT, &params, &device) < 0)
-				{
-					direct3D9->Release();
-					::DestroyWindow(window);
-					::UnregisterClass(windowClass.lpszClassName, windowClass.hInstance);
-					return Status::UnknownError;
-				}
+				hr = d3d9ex->CreateDeviceEx(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
+					D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_NOWINDOWCHANGES, &pp,
+					NULL, &device);
+				if (FAILED(hr)) return exit_fail(window, windowClass);
+				d3d9ex->Release();
 
-				g_methodsTable = (uint150_t*)::calloc(119, sizeof(uint150_t));
-				::memcpy(g_methodsTable, *(uint150_t**)device, 119 * sizeof(uint150_t));
+				g_methodsTable = (uint150_t*)::calloc(133 + 5, sizeof(uint150_t));
+				::memcpy(g_methodsTable, *(uint150_t**)device, 133 * sizeof(uint150_t));
 
+				hr = device->GetSwapChain(0, &swapchain);
 				device->Release();
-				device = NULL;
+				if (FAILED(hr)) return exit_fail(window, windowClass);
 
-				direct3D9->Release();
-				direct3D9 = NULL;
+				::memcpy(g_methodsTable + 133, *(uint150_t**)swapchain, 5 * sizeof(uint150_t));
+				swapchain->Release();
 
 				g_renderType = RenderType::D3D9;
 
